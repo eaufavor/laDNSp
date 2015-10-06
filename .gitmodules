@@ -1,0 +1,6 @@
+[submodule "dnslib"]
+	path = dnslib
+	url = https://github.com/paulchakravarti/dnslib.git
+[submodule "dnspython"]
+	path = dnspython
+	url = https://github.com/rthalley/dnspython.git
