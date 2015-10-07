@@ -4,3 +4,9 @@
 [submodule "dnspython"]
 	path = dnspython
 	url = https://github.com/rthalley/dnspython.git
+[submodule "python-daemon"]
+	path = python-daemon
+	url = https://github.com/eaufavor/python-daemon.git
+[submodule "pylockfile"]
+	path = pylockfile
+	url = https://github.com/openstack/pylockfile.git

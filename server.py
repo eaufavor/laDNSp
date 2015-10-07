@@ -1,29 +1,38 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 import sys
 sys.path.append("./dnspython")
 sys.path.append("./dnslib")
+sys.path.append("./python-daemon")
+sys.path.append("./pylockfile")
 from dns import message, query, exception
 #from dns import rdatatype, resolver
 import time
 import multiprocessing.pool
 import socket
 import httplib
-#import argparse
+import argparse
 import datetime
 import threading
 import traceback
 import SocketServer
 import dnslib
+import os.path
+import signal
+import daemon
+import daemon.pidfile
 #from dnslib import *
 
 
-#Constants
-#http://pcsupport.about.com/od/tipstricks/a/free-public-dns-servers.htm
-#http://www.tech-faq.com/public-dns-servers.html
-#'223.5.5.5'
+# Constants
+# http://pcsupport.about.com/od/tipstricks/a/free-public-dns-servers.htm
+# http://www.tech-faq.com/public-dns-servers.html
+# http://www.bestdns.org/
+# '223.5.5.5'
 DNSlist = ['128.2.184.224', '8.8.8.8', '208.67.222.222', '209.244.0.3',\
            '8.26.56.26', '74.82.42.42', '151.197.0.38']
 PORT = 53
+
+PIDFILE = os.path.abspath(r'./server.pid')
 
 # the record cache
 cache = {}
@@ -64,6 +73,7 @@ def fetch_from_resolver(dns_index_req):
     queue.put((ips, rcode))
     print "Worker thread %d finished"%dns_index
     return 0
+
 
 def merge_duplicated(answers, qtype):
     prefix_pool = {}
@@ -253,12 +263,12 @@ class UDPRequestHandler(BaseRequestHandler):
         return self.request[1].sendto(data, self.client_address)
 
 
-def start_server():
+def start_server(port=PORT):
     print "Starting nameserver..."
 
     servers = [
-        SocketServer.ThreadingUDPServer(('', PORT), UDPRequestHandler),
-        SocketServer.ThreadingTCPServer(('', PORT), TCPRequestHandler),
+        SocketServer.ThreadingUDPServer(('', port), UDPRequestHandler),
+        SocketServer.ThreadingTCPServer(('', port), TCPRequestHandler),
     ]
     for s in servers:
         thread = threading.Thread(target=s.serve_forever)
@@ -285,5 +295,42 @@ def start_server():
 
 
 if __name__ == '__main__':
-    p = multiprocessing.Pool(30)
-    start_server()
+    parser = argparse.ArgumentParser(\
+                formatter_class=argparse.ArgumentDefaultsHelpFormatter,\
+                description='very fast DNS resolver')
+    parser.add_argument('-p', '--port', type=int, default=53,\
+                        help='the TCP port number the agent listens')
+    parser.add_argument('-d', '--daemon', action='store_true', default=False,\
+                        help='run the agent as a daemon')
+    parser.add_argument('-k', '--kill', action='store_true', default=False,\
+                        help='kill a running daemon')
+    args = parser.parse_args()
+
+    if args.daemon:
+        pidFile = daemon.pidfile.PIDLockFile(PIDFILE)
+        pid = pidFile.read_pid()
+        if pid is not None:
+            print "Another daemon, PID %d, is running. Quit." % pid
+            sys.exit(-1)
+        agentLog = open('vsDNS.log', 'a+')
+        context = daemon.DaemonContext(stdout=agentLog,
+                                       stderr=agentLog,
+                                       pidfile=pidFile)
+        context.files_preserve = [agentLog]
+        with context:
+            print "Starting Daemon on port %d" %  args.port
+            p = multiprocessing.Pool(30)
+            start_server(port=args.port)
+    elif args.kill:
+        pidFile = daemon.pidfile.PIDLockFile(PIDFILE)
+        pid = pidFile.read_pid()
+        if pid is None:
+            print "No daemon found."
+            sys.exit(-1)
+        else:
+            os.kill(int(pid), signal.SIGTERM)
+            print "PID %d killed" % pid
+
+    else:
+        p = multiprocessing.Pool(30)
+        start_server(port=args.port)
