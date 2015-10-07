@@ -20,6 +20,7 @@ import os.path
 import signal
 import daemon
 import daemon.pidfile
+import logging
 #from dnslib import *
 
 
@@ -43,7 +44,6 @@ def fetch_from_resolver(dns_index_req):
     domain = dns_index_req[1]
     query_type = dns_index_req[2]
     queue = dns_index_req[3]
-    print "Worker thread", dns_index, domain
     q = message.make_query(domain, query_type)
     rcode = q.rcode()
     count = 0
@@ -55,7 +55,7 @@ def fetch_from_resolver(dns_index_req):
             continue
         break
     if count >= 3:
-        print "Worker thread %d too many retries"%dns_index
+        logging.warning("Worker thread %d too many retries", dns_index)
         return ([], rcode)
     ips = []
     #print msg.answer
@@ -65,13 +65,13 @@ def fetch_from_resolver(dns_index_req):
         if anss.to_rdataset().rdtype == query_type: #match record type
             answer = anss
     if answer is None:
-        print "Worker thread %d empty response"%dns_index
+        logging.warning("Worker thread %d empty response", dns_index)
         return 1
     for ans in answer:
         ips.append(ans.to_text())
-    print "Worker thread %d got answer"%dns_index
+    logging.debug("Worker thread %d got answer", dns_index)
     queue.put((ips, rcode))
-    print "Worker thread %d finished"%dns_index
+    logging.debug("Worker thread %d finished", dns_index)
     return 0
 
 
@@ -102,29 +102,31 @@ def round_trip_latency(IP):
     return end - start
 
 def refine(qname_str, qtype, answers):
-    print 'refining answers'
+    logging.info('refining answers for %s', qname_str)
     if qtype != dnslib.QTYPE.A:
         # only refine A record
         return
     IPs = merge_duplicated(answers, qtype)
-    print 'reduce to', IPs
-    min_RTT = 9999
-    min_IP = None
+    logging.debug('reduce to %s', IPs)
 
-    for IP in IPs:
-        rtt = round_trip_latency(IP)
-        print 'RTT:', IP, rtt
-        if rtt < min_RTT:
-            min_RTT = rtt
-            min_IP = IP
-    print 'min IP', min_IP
+    min_RTT = 9999
+    min_IP = IPs[0]
+
+    if len(IPs) > 1:
+        for IP in IPs:
+            rtt = round_trip_latency(IP)
+            logging.debug('RTT: %d, %s', IP, rtt)
+            if rtt < min_RTT:
+                min_RTT = rtt
+                min_IP = IP
+    logging.info('min IP: %s', min_IP)
     cache[(qname_str, qtype)] = ([min_IP], 0)
 
 
 def parallel_resolve(request, reply_callback, qname_str=None, qtype=None):
     # if request and reply_callback are set, this function is called for a query
     # otherwise qname_str and qtype are set, this function is called to refresh
-    print "Parallel resolver"
+    logging.debug("Parallel resolver")
     if request:
         qname_str = str(request.q.qname)
         qtype = request.q.qtype
@@ -137,20 +139,20 @@ def parallel_resolve(request, reply_callback, qname_str=None, qtype=None):
     for i in range(len(DNSlist)):
         dns_index_req.append((i, qname_str, qtype, queue))
 
-    print "ready to lookup"
+    logging.debug("start lookup")
     waiting = p.map_async(fetch_from_resolver, dns_index_req)
 
     # get the first response, and reply to client
-    print "waiting for first response"
+    logging.debug("waiting for first response")
     first_response = queue.get(block=True)
-    print "got first response, replying"
+    logging.info("got first response:%s, replying", first_response)
     if reply_callback:
         reply_query(first_response, request, reply_callback)
 
     # wait for the rest answers
     answers = [first_response]
     waiting.get(9999)
-    print "all workers are finished"
+    logging.debug("all workers are finished")
     while not queue.empty():
         answers.append(queue.get(block=False))
 
@@ -158,12 +160,12 @@ def parallel_resolve(request, reply_callback, qname_str=None, qtype=None):
 
 
 def dns_resolve(request, reply_callback):
-    print "resolving"
+    logging.debug("resolving")
     qname_str = str(request.q.qname)
     qtype = request.q.qtype
     if (qname_str, qtype) in cache:
         # cache hit
-        print "cache hit"
+        logging.info("cache hit: %s", qname_str)
         answer = cache[(qname_str, qtype)]
         reply_query(answer, request, reply_callback)
     else:
@@ -207,10 +209,10 @@ def prepare_reply(answer, request):
     return reply.pack()
 
 def process_DNS_query(data, reply_callback):
-    print "parsing DNS query"
+    logging.debug("parsing DNS query")
     # parse the request
     request = dnslib.DNSRecord.parse(data)
-    print request
+    logging.info('Lookup request: %s', request)
     # lookup the record
     dns_resolve(request, reply_callback)
 
@@ -226,11 +228,12 @@ class BaseRequestHandler(SocketServer.BaseRequestHandler):
 
     def handle(self):
         now = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')
-        print "\n\n%s request %s (%s %s):" % (self.__class__.__name__[:3],\
+        logging.info('Got request: \n\n%s request %s (%s %s):',\
+                     self.__class__.__name__[:3],\
                      now, self.client_address[0], self.client_address[1])
         try:
             data = self.get_data()
-            print len(data), data.encode('hex')
+            logging.debug('RAW data(%d): %s', len(data), data.encode('hex'))
             # repr(data).replace('\\x', '')[1:-1]
             process_DNS_query(data, self.send_data)
             #self.send_data(dns_response(data))
@@ -264,11 +267,11 @@ class UDPRequestHandler(BaseRequestHandler):
 
 
 def start_server(port=PORT):
-    print "Starting nameserver..."
+    logging.info("Starting nameserver...")
 
     servers = [
-        SocketServer.ThreadingUDPServer(('', port), UDPRequestHandler),
-        SocketServer.ThreadingTCPServer(('', port), TCPRequestHandler),
+        SocketServer.ThreadingUDPServer(('127.0.0.1', port), UDPRequestHandler),
+        SocketServer.ThreadingTCPServer(('127.0.0.1', port), TCPRequestHandler),
     ]
     for s in servers:
         thread = threading.Thread(target=s.serve_forever)
@@ -276,8 +279,8 @@ def start_server(port=PORT):
         thread.daemon = True
         # exit the server thread when the main thread terminates
         thread.start()
-        print "%s server loop running in thread: %s" %\
-                    (s.RequestHandlerClass.__name__[:3], thread.name)
+        logging.info("%s server loop running in thread: %s",\
+                     s.RequestHandlerClass.__name__[:3], thread.name)
     try:
         while 1:
             time.sleep(1)
@@ -287,7 +290,7 @@ def start_server(port=PORT):
     except KeyboardInterrupt:
         pass
     finally:
-        print 'Shutting down servers'
+        logging.warning('Shutting down servers')
         for s in servers:
             s.shutdown()
         p.close()
@@ -310,7 +313,7 @@ if __name__ == '__main__':
         pidFile = daemon.pidfile.PIDLockFile(PIDFILE)
         pid = pidFile.read_pid()
         if pid is not None:
-            print "Another daemon, PID %d, is running. Quit." % pid
+            logging.critical("Another daemon, PID %d, is running. Quit.", pid)
             sys.exit(-1)
         agentLog = open('vsDNS.log', 'a+')
         context = daemon.DaemonContext(stdout=agentLog,
@@ -318,18 +321,18 @@ if __name__ == '__main__':
                                        pidfile=pidFile)
         context.files_preserve = [agentLog]
         with context:
-            print "Starting Daemon on port %d" %  args.port
+            logging.info("Starting Daemon on port %d", args.port)
             p = multiprocessing.Pool(30)
             start_server(port=args.port)
     elif args.kill:
         pidFile = daemon.pidfile.PIDLockFile(PIDFILE)
         pid = pidFile.read_pid()
         if pid is None:
-            print "No daemon found."
+            logging.error("No daemon found.")
             sys.exit(-1)
         else:
             os.kill(int(pid), signal.SIGTERM)
-            print "PID %d killed" % pid
+            logging.info("PID %d killed", pid)
 
     else:
         p = multiprocessing.Pool(30)
