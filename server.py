@@ -6,7 +6,8 @@ from dns import message, query, exception
 #from dns import rdatatype, resolver
 import time
 import multiprocessing.pool
-#import socket
+import socket
+import httplib
 #import argparse
 import datetime
 import threading
@@ -64,17 +65,64 @@ def fetch_from_resolver(dns_index_req):
     print "Worker thread %d finished"%dns_index
     return 0
 
-def refine(qname_str, qtype, answers):
-    pass
+def merge_duplicated(answers, qtype):
+    prefix_pool = {}
+    ip_list = []
+    for ans in answers:
+        for a in ans[0]:
+            if '.'.join(a.split(".")[:3]) not in prefix_pool:
+                #ignore the IP from same subnet
+                ip_list.append(a)
+                prefix_pool['.'.join(a.split(".")[:3])] = 1
+            else:
+                pass
+    return ip_list
 
-def parallel_resolve(request, reply_callback):
+
+def round_trip_latency(IP):
+
+    start = time.time()*1000
+    h1 = httplib.HTTPConnection(IP)
+    try:
+        h1.connect()
+    except socket.timeout:
+        return 9999
+    end = time.time()*1000
+    h1.close()
+    return end - start
+
+def refine(qname_str, qtype, answers):
+    print 'refining answers'
+    if qtype != dnslib.QTYPE.A:
+        # only refine A record
+        return
+    IPs = merge_duplicated(answers, qtype)
+    print 'reduce to', IPs
+    min_RTT = 9999
+    min_IP = None
+
+    for IP in IPs:
+        rtt = round_trip_latency(IP)
+        print 'RTT:', IP, rtt
+        if rtt < min_RTT:
+            min_RTT = rtt
+            min_IP = IP
+    print 'min IP', min_IP
+    cache[(qname_str, qtype)] = ([min_IP], 0)
+
+
+def parallel_resolve(request, reply_callback, qname_str=None, qtype=None):
+    # if request and reply_callback are set, this function is called for a query
+    # otherwise qname_str and qtype are set, this function is called to refresh
     print "Parallel resolver"
-    qname_str = str(request.q.qname)
-    qtype = request.q.qtype
+    if request:
+        qname_str = str(request.q.qname)
+        qtype = request.q.qtype
+
     manager = multiprocessing.Manager()
     queue = manager.Queue()
 
-    # Fire parallel lookup
+    # Fire parallel lookups
     dns_index_req = []
     for i in range(len(DNSlist)):
         dns_index_req.append((i, qname_str, qtype, queue))
@@ -86,7 +134,8 @@ def parallel_resolve(request, reply_callback):
     print "waiting for first response"
     first_response = queue.get(block=True)
     print "got first response, replying"
-    reply_query(first_response, request, reply_callback)
+    if reply_callback:
+        reply_query(first_response, request, reply_callback)
 
     # wait for the rest answers
     answers = [first_response]
@@ -96,6 +145,7 @@ def parallel_resolve(request, reply_callback):
         answers.append(queue.get(block=False))
 
     refine(qname_str, qtype, answers)
+
 
 def dns_resolve(request, reply_callback):
     print "resolving"
@@ -227,8 +277,11 @@ def start_server():
     except KeyboardInterrupt:
         pass
     finally:
+        print 'Shutting down servers'
         for s in servers:
             s.shutdown()
+        p.close()
+        p.terminate()
 
 
 if __name__ == '__main__':
