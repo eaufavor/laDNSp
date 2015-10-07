@@ -21,6 +21,7 @@ import signal
 import daemon
 import daemon.pidfile
 import logging
+import pickle
 #from dnslib import *
 
 
@@ -34,6 +35,7 @@ DNSlist = ['128.2.184.224', '8.8.8.8', '208.67.222.222', '209.244.0.3',\
 PORT = 53
 
 PIDFILE = os.path.abspath(r'./server.pid')
+CACHE_FILE = os.path.abspath(r"./cache.db")
 
 # the record cache
 cache = {}
@@ -272,6 +274,23 @@ class UDPRequestHandler(BaseRequestHandler):
     def send_data(self, data):
         return self.request[1].sendto(data, self.client_address)
 
+def cache_manager():
+    # reload cache saved to disk
+
+    if os.path.isfile(CACHE_FILE):
+        with open(CACHE_FILE, 'rb') as f:
+            file_cache = pickle.load(f)
+            for k in file_cache:
+                cache[k] = file_cache[k]
+        logging.info('Loaded %d cache entries from disk', len(cache))
+
+    while True:
+        time.sleep(60)
+        with open(CACHE_FILE, 'wb+') as f:
+            pickle.dump(cache, f)
+        logging.info('Autosaved %d cache entries to disk', len(cache))
+
+
 
 def start_server(port=PORT):
     logging.info("Starting nameserver...")
@@ -279,6 +298,9 @@ def start_server(port=PORT):
     servers = [
         SocketServer.ThreadingUDPServer(('127.0.0.1', port), UDPRequestHandler),
         SocketServer.ThreadingTCPServer(('127.0.0.1', port), TCPRequestHandler),
+    ]
+    routines = [
+        threading.Thread(name='CacheManager', target=cache_manager, args=())
     ]
     for s in servers:
         thread = threading.Thread(target=s.serve_forever)
@@ -288,6 +310,10 @@ def start_server(port=PORT):
         thread.start()
         logging.info("%s server loop running in thread: %s",\
                      s.RequestHandlerClass.__name__[:3], thread.name)
+    for r in routines:
+        r.daemon = True
+        r.start()
+        logging.info("Routine %s started", r.name)
     try:
         while 1:
             time.sleep(1)
@@ -327,7 +353,7 @@ if __name__ == '__main__':
         level = logging.INFO
     logging.basicConfig(
         format="%(levelname) -10s %(asctime)s\
-                %(module)s:%(lineno) -7s %(message)s",
+                %(threadName)s:%(lineno) -7s %(message)s",
         level=level
     )
 
@@ -337,11 +363,11 @@ if __name__ == '__main__':
         if pid is not None:
             logging.critical("Another daemon, PID %d, is running. Quit.", pid)
             sys.exit(-1)
-        agentLog = open('vsDNS.log', 'a+')
-        context = daemon.DaemonContext(stdout=agentLog,
-                                       stderr=agentLog,
+        serverLog = open('vsDNS.log', 'a+')
+        context = daemon.DaemonContext(stdout=serverLog,
+                                       stderr=serverLog,
                                        pidfile=pidFile)
-        context.files_preserve = [agentLog]
+        context.files_preserve = [serverLog]
         with context:
             logging.info("Starting Daemon on port %d", args.port)
             p = multiprocessing.Pool(30)
