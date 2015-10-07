@@ -56,7 +56,8 @@ def fetch_from_resolver(dns_index_req):
         break
     if count >= 3:
         logging.warning("Worker thread %d too many retries", dns_index)
-        return ([], rcode)
+        queue.put(([], rcode))
+        return rcode
     ips = []
     #print msg.answer
     answer = None
@@ -65,7 +66,9 @@ def fetch_from_resolver(dns_index_req):
         if anss.to_rdataset().rdtype == query_type: #match record type
             answer = anss
     if answer is None:
-        logging.warning("Worker thread %d empty response", dns_index)
+        logging.warning("Worker thread %d empty response for %s",\
+                        dns_index, domain)
+        queue.put(([], rcode))
         return 1
     for ans in answer:
         ips.append(ans.to_text())
@@ -104,7 +107,11 @@ def round_trip_latency(IP):
 def refine(qname_str, qtype, answers):
     logging.info('refining answers for %s', qname_str)
     if qtype != dnslib.QTYPE.A:
-        # only refine A record
+        # only cache the results from the first success resolver
+        for ans in answers:
+            if ans[1] == 0:
+                cache[(qname_str, qtype)] = ans
+                break
         return
     IPs = merge_duplicated(answers, qtype)
     logging.debug('reduce to %s', IPs)
@@ -151,7 +158,7 @@ def parallel_resolve(request, reply_callback, qname_str=None, qtype=None):
 
     # wait for the rest answers
     answers = [first_response]
-    waiting.get(9999)
+    waiting.get(30)
     logging.debug("all workers are finished")
     while not queue.empty():
         answers.append(queue.get(block=False))
@@ -307,7 +314,22 @@ if __name__ == '__main__':
                         help='run the agent as a daemon')
     parser.add_argument('-k', '--kill', action='store_true', default=False,\
                         help='kill a running daemon')
+    parser.add_argument('-q', '--quiet', action='store_true', default=False,\
+                        help='only print errors')
+    parser.add_argument('-v', '--verbose', action='store_true', default=False,\
+                        help='print debug info.')
     args = parser.parse_args()
+    if args.quiet:
+        level = logging.WARNING
+    elif args.verbose:
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+    logging.basicConfig(
+        format="%(levelname) -10s %(asctime)s\
+                %(module)s:%(lineno) -7s %(message)s",
+        level=level
+    )
 
     if args.daemon:
         pidFile = daemon.pidfile.PIDLockFile(PIDFILE)
