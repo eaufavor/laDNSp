@@ -63,9 +63,12 @@ def fetch_from_resolver(dns_index_req):
     ips = []
     #print msg.answer
     answer = None
+    logging.debug("Worker thread %d gets reply %s", dns_index, msg.answer)
     for anss in msg.answer:
         #print "Type", rdatatype.to_text(anss.to_rdataset().rdtype)
+        logging.debug("Worker thread %d gets reply item%s", dns_index, anss.to_rdataset())
         if anss.to_rdataset().rdtype == query_type: #match record type
+            logging.debug("reply %s", anss)
             answer = anss
     if answer is None:
         logging.warning("Worker thread %d empty response for %s",\
@@ -124,7 +127,7 @@ def refine(qname_str, qtype, answers):
     if len(IPs) > 1:
         for IP in IPs:
             rtt = round_trip_latency(IP)
-            logging.debug('RTT: %d, %s', IP, rtt)
+            logging.debug('RTT: %s, %s', IP, rtt)
             if rtt < min_RTT:
                 min_RTT = rtt
                 min_IP = IP
