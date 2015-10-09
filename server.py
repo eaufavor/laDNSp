@@ -1,13 +1,13 @@
 #!/usr/bin/env python2
 import sys
-sys.path.append("./dnspython")
+#sys.path.append("./dnspython")
 sys.path.append("./dnslib")
 sys.path.append("./python-daemon")
 sys.path.append("./pylockfile")
 from dns import message, query, exception
 #from dns import rdatatype, resolver
 import time
-import multiprocessing.pool
+#import multiprocessing.pool
 import socket
 import httplib
 import argparse
@@ -22,6 +22,8 @@ import daemon
 import daemon.pidfile
 import logging
 import pickle
+import Queue
+from threading import Thread
 #from dnslib import *
 
 
@@ -32,6 +34,7 @@ import pickle
 # '223.5.5.5'
 DNSlist = ['128.2.184.224', '8.8.8.8', '208.67.222.222', '209.244.0.3',\
            '8.26.56.26', '74.82.42.42', '151.197.0.38']
+#DNSlist = ['128.2.184.224']
 PORT = 53
 
 PIDFILE = os.path.abspath(r'./server.pid')
@@ -41,47 +44,59 @@ CACHE_FILE = os.path.abspath(r"./cache.db")
 cache = {}
 # the worker threads
 
-def fetch_from_resolver(dns_index_req):
-    dns_index = dns_index_req[0]
-    domain = dns_index_req[1]
-    query_type = dns_index_req[2]
-    queue = dns_index_req[3]
-    q = message.make_query(domain, query_type)
-    rcode = q.rcode()
-    count = 0
-    while True and count < 3:
-        try:
-            msg = query.udp(q, DNSlist[dns_index], timeout=1)
-        except exception.Timeout:
-            count += 1
-            continue
-        break
-    if count >= 3:
-        logging.warning("Worker thread %d too many retries", dns_index)
-        queue.put(([], rcode))
-        return rcode
-    ips = []
-    #print msg.answer
-    answer = None
-    logging.debug("Worker thread %d gets reply %s", dns_index, msg.answer)
-    for anss in msg.answer:
-        #print "Type", rdatatype.to_text(anss.to_rdataset().rdtype)
-        logging.debug("Worker thread %d gets reply item%s", dns_index, anss.to_rdataset())
-        if anss.to_rdataset().rdtype == query_type: #match record type
-            logging.debug("reply %s", anss)
-            answer = anss
-    if answer is None:
-        logging.warning("Worker thread %d empty response for %s",\
-                        dns_index, domain)
-        queue.put(([], rcode))
-        return 1
-    for ans in answer:
-        ips.append(ans.to_text())
-    logging.debug("Worker thread %d got answer", dns_index)
-    queue.put((ips, rcode))
-    logging.debug("Worker thread %d finished", dns_index)
-    return 0
 
+class FetchWorker(Thread):
+    def __init__(self, dns_index_req):
+        Thread.__init__(self)
+        self.dns_index_req = dns_index_req
+
+    def run(self):
+        dns_index_req = self.dns_index_req
+        dns_index = dns_index_req[0]
+        domain = dns_index_req[1]
+        query_type = dns_index_req[2]
+        queue = dns_index_req[3]
+        request = dns_index_req[4]
+        reply_callback = dns_index_req[5]
+        flag = dns_index_req[6]
+        q = message.make_query(domain, query_type)
+        q.id = request.header.id
+        rcode = q.rcode()
+        count = 0
+        start = time.time()*1000
+        while True and count < 3:
+            try:
+                msg = query.udp(q, DNSlist[dns_index], timeout=1, flag=flag,
+                                r_callback=reply_callback)
+            except exception.Timeout:
+                count += 1
+                continue
+            break
+        if count >= 3:
+            logging.warning("Worker thread %d too many retries", dns_index)
+            queue.put(([], rcode))
+            return rcode
+        ips = []
+        answer = None
+        logging.debug("Worker thread %d gets reply %s", dns_index, msg.answer)
+        for anss in msg.answer:
+            #print "Type", rdatatype.to_text(anss.to_rdataset().rdtype)
+            if anss.to_rdataset().rdtype == query_type: #match record type
+            #    logging.debug("reply %s", anss)
+                answer = anss
+        if answer is None:
+            logging.warning("Worker thread %d empty response for %s",\
+                            dns_index, domain)
+            queue.put(([], rcode))
+            return 1
+        for ans in answer:
+            ips.append(ans.to_text())
+        end = time.time()*1000
+        logging.debug("Worker thread %d got answer, delay: %dms",
+                      dns_index, end-start)
+        queue.put((ips, rcode))
+        #time.sleep(0)
+        return 0
 
 def merge_duplicated(answers, qtype):
     prefix_pool = {}
@@ -110,6 +125,7 @@ def round_trip_latency(IP):
     return end - start
 
 def refine(qname_str, qtype, answers):
+    return
     logging.info('refining answers for %s', qname_str)
     if qtype != dnslib.QTYPE.A:
         # only cache the results from the first success resolver
@@ -139,34 +155,49 @@ def parallel_resolve(request, reply_callback, qname_str=None, qtype=None):
     # if request and reply_callback are set, this function is called for a query
     # otherwise qname_str and qtype are set, this function is called to refresh
     logging.debug("Parallel resolver")
+    start = time.time()*1000
     if request:
         qname_str = str(request.q.qname)
         qtype = request.q.qtype
 
-    manager = multiprocessing.Manager()
-    queue = manager.Queue()
+    queue = Queue.Queue()
 
     # Fire parallel lookups
-    dns_index_req = []
+    flag = []
+
+    workers = []
     for i in range(len(DNSlist)):
-        dns_index_req.append((i, qname_str, qtype, queue))
+        worker = FetchWorker((i, qname_str, qtype, queue, request,
+                              reply_callback, flag))
+        worker.daemon = True
+        worker.start()
+        workers.append(worker)
 
-    logging.debug("start lookup")
-    waiting = p.map_async(fetch_from_resolver, dns_index_req)
-
+    end = time.time()*1000
+    logging.debug("prepare task, latency: %d ms", (end-start))
+    time.sleep(0)
     # get the first response, and reply to client
-    logging.debug("waiting for first response")
-    first_response = queue.get(block=True)
-    logging.info("got first response:%s, replying", first_response)
-    if reply_callback:
-        reply_query(first_response, request, reply_callback)
+    #logging.debug("waiting for first response")
+    #start = time.time()*1000
+    #first_response = queue.get()
 
+    #end = time.time()*1000
+    #print "parallel_resolve, latency: %d ms"%(end-start)
+    #logging.info("got first response:%s, replying", first_response)
+    #start = time.time()*1000
+    #if reply_callback:
+    #    reply_query(first_response, request, reply_callback)
+    #end = time.time()*1000
+    #print "Send reply, latency: %d ms"%(end-start)
     # wait for the rest answers
-    answers = [first_response]
-    waiting.get(30)
-    logging.debug("all workers are finished")
+    #answers = [first_response]
+    answers = []
+
+    for worker in workers:
+        worker.join()
+    logging.debug("all workers finished")
     while not queue.empty():
-        answers.append(queue.get(block=False))
+        answers.append(queue.get())
 
     refine(qname_str, qtype, answers)
 
@@ -329,9 +360,6 @@ def start_server(port=PORT):
         logging.warning('Shutting down servers')
         for s in servers:
             s.shutdown()
-        p.close()
-        p.terminate()
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(\
@@ -373,7 +401,6 @@ if __name__ == '__main__':
         context.files_preserve = [serverLog]
         with context:
             logging.info("Starting Daemon on port %d", args.port)
-            p = multiprocessing.Pool(30)
             start_server(port=args.port)
     elif args.kill:
         pidFile = daemon.pidfile.PIDLockFile(PIDFILE)
@@ -382,9 +409,8 @@ if __name__ == '__main__':
             logging.error("No daemon found.")
             sys.exit(-1)
         else:
-            os.kill(int(pid), signal.SIGTERM)
+            os.kill(int(pid), signal.SIGINT)
             logging.info("PID %d killed", pid)
 
     else:
-        p = multiprocessing.Pool(30)
         start_server(port=args.port)
