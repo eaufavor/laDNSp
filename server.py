@@ -125,7 +125,6 @@ def round_trip_latency(IP):
     return end - start
 
 def refine(qname_str, qtype, answers):
-    return
     logging.info('refining answers for %s', qname_str)
     if qtype != dnslib.QTYPE.A:
         # only cache the results from the first success resolver
