@@ -7,3 +7,6 @@
 [submodule "pylockfile"]
 	path = pylockfile
 	url = https://github.com/openstack/pylockfile.git
+[submodule "dnspython"]
+	path = dnspython
+	url = https://github.com/eaufavor/dnspython.git

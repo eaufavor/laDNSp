@@ -2,3 +2,4 @@
 *.log
 *.pid
 *.db
+test/*
