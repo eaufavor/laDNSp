@@ -394,7 +394,7 @@ if __name__ == '__main__':
         if pid is not None:
             logging.critical("Another daemon, PID %d, is running. Quit.", pid)
             sys.exit(-1)
-        serverLog = open('vsDNS.log', 'a+')
+        serverLog = open('laDNSp.log', 'a+')
         context = daemon.DaemonContext(stdout=serverLog,
                                        stderr=serverLog,
                                        pidfile=pidFile)
