@@ -16,6 +16,11 @@ laDNSp measures and caches the fastest IP if a domain name resolves to multiple 
 3. Run laDNSp, then select laDNSp as the default resolver of your OS.
 
 
+### Features
+- Fast DNS resolving
+- Permanent caching
+- Smart IP selection
+
 ### Installation & usage
 
 TDB
