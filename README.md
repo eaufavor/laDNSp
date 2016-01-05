@@ -6,9 +6,9 @@ laDNSp is a caching DNS proxy which speeds up Internet access by reducing both D
 ### Why
 laDNSp picks the fastest DNS resolver and the fastest server from the resolved IP addresses.
 
-For DNS lookup, laDNSp sends simultaneous DNS requests to multiple DNS resolvers and wait for the first response. It replies to users the first response but also records the rest responses for further refinement. Users always get the fastest DNS responses.
+When resolving IP addresses, laDNSp sends simultaneous DNS requests to multiple DNS resolvers and waits for the first response. It replies to users the first response and also records the rest responses for further refinement. Users always get the fastest DNS responses.
 
-laDNSp measures and caches the fastest IP if a domain name resolves to multiple IP addresses. When users lookup a cached domain name, laDNSp returns the fastest IP for that domain name instantly. Therefore, users are directed to the fastest server.
+Then, laDNSp measures and caches the fastest IP when a domain name is resolved to multiple IP addresses. When users lookup a cached domain name, laDNSp returns the fastest IP for that domain name instantly. Therefore, users are directed to the fastest server.
 
 ### How to use
 1. Install laDNSp on your computer or in your local network.
