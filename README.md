@@ -27,7 +27,7 @@ TDB
 
 ### Performance tests
 
-##### CDF of Lokoup delay for uncached(new) DNS records ([how to read CDF](http://ukclimateprojections.metoffice.gov.uk/22619))
+##### CDF of Lookup delay for uncached(new) DNS records ([how to read CDF](http://ukclimateprojections.metoffice.gov.uk/22619))
 ![delay](https://raw.githubusercontent.com/eaufavor/laDNSp/master/evaluation/first_lookup_delay.png)
 
 - 93.7% DNS requests can be finished within 30ms.
